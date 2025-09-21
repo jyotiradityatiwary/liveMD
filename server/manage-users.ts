@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import sqlite3 from "sqlite3";
+import sqlite3, { type Database } from "sqlite3";
 import promptSync from "prompt-sync";
 import bcrypt from "bcrypt";
 
@@ -38,6 +38,26 @@ function getPassword(): string {
 
 let errorOccurred: boolean = false;
 
+async function insertUserIntoDb(
+  db: Database,
+  username: string,
+  hashedPassword: string,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    db.run(
+      "INSERT INTO Users(username, password) VALUES (?, ?);",
+      [username, hashedPassword],
+      (error) => {
+        if (error) {
+          console.error("Failed to add user");
+          errorOccurred = true;
+          reject("Unexpected error");
+        } else resolve();
+      },
+    );
+  });
+}
+
 async function createUser(): Promise<void> {
   const username: string = process.argv[3] || getUsername();
   const plaintextPassword: string = getPassword();
@@ -46,37 +66,49 @@ async function createUser(): Promise<void> {
     SALT_ROUNDS,
   );
   const db = openDatabase();
-  db.run(
-    "INSERT INTO Users(username, password) VALUES (?, ?)",
-    [username, hashedPassword],
-    (error) => {
-      console.error("Failed to add user");
-      errorOccurred = true;
-    },
-  );
+  await insertUserIntoDb(db, username, hashedPassword);
   db.close();
 }
 
-function deleteUser(): void {
+async function deleteUserFromDb(db: Database, username: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    db.run("DELETE FROM Users WHERE username=?;", [username], (error) => {
+      if (error) {
+        console.error("Failed to delete user.");
+        errorOccurred = true;
+        reject();
+      } else resolve();
+    });
+  });
+}
+
+async function deleteUser(): Promise<void> {
   const username: string = getUsername();
   const db = openDatabase();
-  db.run("DELETE FROM Users WHERE username=?", [username], (error) => {
-    console.error("Failed to delete user.");
-    errorOccurred = true;
-  });
+  await deleteUserFromDb(db, username);
   db.close();
 }
 
-function listUsers(): void {
-  const db = openDatabase();
-  db.all("SELECT usernames FROM Users;", [], (error, rows) => {
-    if (error) {
-      console.error("Failed to list users");
-      errorOccurred = true;
-    } else {
-      console.log(rows);
-    }
+async function listUsersInDb(db: Database): Promise<void> {
+  return new Promise((resolve, reject) => {
+    db.all("SELECT username FROM Users;", [], (error, rows) => {
+      if (error) {
+        console.error("Failed to list users");
+        errorOccurred = true;
+        reject();
+      } else {
+        console.log("Users:");
+        for (const row of rows) console.log(row.username);
+        resolve();
+      }
+    });
   });
+}
+
+async function listUsers(): Promise<void> {
+  const db = openDatabase();
+  await listUsersInDb(db);
+  db.close();
 }
 
 switch (process.argv[2]) {
@@ -88,10 +120,10 @@ switch (process.argv[2]) {
     await createUser();
     break;
   case "delete":
-    deleteUser();
+    await deleteUser();
     break;
   case "list":
-    listUsers();
+    await listUsers();
     break;
   default:
     console.error("Invalid command");

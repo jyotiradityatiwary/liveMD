@@ -1,84 +1,21 @@
-import path from "path";
-
 import express from "express";
 import cookieSession from "cookie-session";
-import sqlite3 from "sqlite3";
 import bcrypt from "bcrypt";
-import { query, validationResult } from "express-validator";
+import { body, query, validationResult } from "express-validator";
 import expressWs from "express-ws";
 import { setupWSConnection } from "@y/websocket-server/utils";
 
+import {
+  db,
+  initializeDatabseIfNotInitialized,
+  newDocument,
+  checkAccess,
+  updateDocumentVisibility,
+} from "./src/database.ts";
+
 const SALT_ROUNDS = 10;
 
-const DATA_DIR = process.env.SERVER_DATA_DIR || "./data";
-console.log(`Using directory ${DATA_DIR} for application data`);
-
-sqlite3.verbose();
-const db = new sqlite3.Database(path.join(DATA_DIR, "data.sqlite3"));
-
-function initializeDatabseIfNotInitialized(): void {
-  db.get(
-    "SELECT name FROM sqlite_master WHERE type='table' AND name='Users';",
-    [],
-    (error, row) => {
-      if (error) {
-        console.error(
-          "Unexpected error when checking if database is initialized",
-        );
-        process.exit(1);
-      }
-      if (row !== undefined) {
-        // The DB is already initialized
-        console.debug("Database is already initialized");
-        return;
-      }
-      console.log("Databse not initiliazed. Initializing now.");
-      db.exec(
-        `
-        CREATE TABLE Users (
-          username STRING PRIMARY KEY,
-          password STRING NOT NULL
-        );
-
-        CREATE TABLE Documents (
-          documentId STRING PRIMARY KEY,
-          ownerUsername STRING NOT NULL REFERENCES Users(username),
-          isPublic BOOLEAN NOT NULL
-        );
-
-        CREATE INDEX idxOwnerUsernameOnDocuments ON Documents(ownerUsername);
-          `,
-        (error) => {
-          if (error) {
-            console.error(
-              "Unexpected error when trying to initialize database.",
-            );
-            process.exit(1);
-          }
-        },
-      );
-    },
-  );
-}
 initializeDatabseIfNotInitialized();
-
-async function doesUserHaveAccess(
-  username: string,
-  documentId: string,
-): Promise<boolean> {
-  return new Promise((resolve, reject) => {
-    if (!username || !documentId) resolve(false);
-    db.get(
-      "SELECT ownerUsername, isPublic FROM Documents WHERE documentId = ?",
-      [documentId],
-      (error, row) => {
-        if (error) reject(error);
-        if (row === undefined) resolve(false);
-        resolve(row.isPublic === true || row.ownerUsername === username);
-      },
-    );
-  });
-}
 
 if (!process.env.COOKIE_SECRET) {
   console.warn(
@@ -87,18 +24,19 @@ if (!process.env.COOKIE_SECRET) {
 }
 
 const { app } = expressWs(express());
-
-app.use(express.json());
 app.use(
   cookieSession({
     name: "session",
     secret: process.env.EXPRESS_SECRET || "DEFAULT COOKIE SECRET xsalkjxn12oin",
-    sameSite: "strict",
-    httpOnly: true,
+    // sameSite: "strict",
+    // httpOnly: true,
     signed: true,
     maxAge: 24 * 60 * 60 * 1000, // 24 hours
   }),
 );
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
 const PORT = process.env.PORT || 3000;
 
 app.get("/api/status", (request, response) => {
@@ -108,12 +46,12 @@ app.get("/api/status", (request, response) => {
 app.post(
   "/api/login",
   [
-    query("username")
+    body("username")
       .notEmpty()
       .withMessage("username cannot be empty")
       .isString()
       .withMessage("username must be a string"),
-    query("password")
+    body("password")
       .notEmpty()
       .withMessage("password cannot be empty")
       .isString()
@@ -124,8 +62,8 @@ app.post(
     if (!validationErrors.isEmpty()) {
       return response.status(400).json({ errors: validationErrors.array() });
     }
-    const username = request.query.username;
-    const password: string = request.query.password as string;
+    const username = request.body.username;
+    const password: string = request.body.password as string;
     db.get(
       "SELECT password FROM Users WHERE username = ?",
       [username],
@@ -138,7 +76,7 @@ app.post(
           return;
         }
         if (row === undefined) {
-          // user not present
+          console.debug("Username not found in database in login attempt.");
           response.redirect("/login?retry=true");
           return;
         }
@@ -162,18 +100,22 @@ app.post(
           correctHashedPassword,
         );
         if (passwordMatch) {
-          request.sesssion.username = username;
+          console.debug(`username:${username} logged in`);
+          request.session!.username = username;
           response.redirect("/");
         } else {
+          console.debug("Password mismatch in login attempt");
           response.redirect("/login?retry=true");
         }
       },
     );
   },
 );
+
 app.get("/api/validateLogin", (request, response: express.Response) => {
+  console.log(request.session);
   if (!request.session) {
-    response.json({ hasSession: true, isLoggedIn: false });
+    response.json({ hasSession: false, isLoggedIn: false });
     return;
   }
   if (
@@ -203,18 +145,21 @@ app.post(
   },
 );
 
+function isUserLoggedIn(request: express.Request): boolean {
+  return (request.session && "username" in request.session && true) || false;
+}
+
+function getUsername(request: express.Request): string | null {
+  return isUserLoggedIn(request) ? request.session!.username : null;
+}
+
 app.ws("/api/documents/:documentId", async (ws, request) => {
-  if (request.session === null || !("username" in request.session)) {
-    // User is not authenticated
-    console.log("Rejected unauthorized websocket connection attempt");
-    ws.terminate();
-    return;
-  }
-  const username = request.session.username;
+  const username = getUsername(request);
   const documentId = request.params.documentId;
-  if (!(await doesUserHaveAccess(username, documentId))) {
+  const accessDetail = await checkAccess({ username, documentId });
+  if (!accessDetail.hasAccess) {
     // User does not have access to this document
-    console.log(
+    console.debug(
       "Rejected attempt to establish websocket connection on a document that the user does not have access to.",
     );
     ws.terminate();
@@ -229,6 +174,66 @@ app.ws("/api/documents/:documentId", async (ws, request) => {
     docName: request.params.documentId,
   });
 });
+
+app.post("/api/newDocument", async (request, response) => {
+  if (!request.session || !request.session.username) {
+    response.redirect("/login");
+    return;
+  }
+  const newDocumentId: string = await newDocument(request.session!.username);
+  response.redirect(`/editor?documentId=${newDocumentId}`);
+});
+
+app.get(
+  "/api/checkAccess",
+  [
+    query("documentId")
+      .notEmpty()
+      .withMessage("documentId cannot be empty")
+      .isString()
+      .withMessage("documentId must be a string"),
+  ],
+  async (request: express.Request, response: express.Response) => {
+    const validationErrors = validationResult(request);
+    if (!validationErrors.isEmpty()) {
+      response.status(400).json({ errors: validationErrors.array() });
+      return;
+    }
+    const documentId = request.query.documentId as string;
+    const username = getUsername(request);
+    const accessDetails = await checkAccess({ username, documentId });
+    response.json(accessDetails);
+  },
+);
+
+app.post(
+  "/api/updateDocumentVisibility",
+  [
+    body("documentId")
+      .notEmpty()
+      .withMessage("documentId cannot be empty")
+      .isString()
+      .withMessage("documentId must be a string"),
+    body("isPublic")
+      .notEmpty()
+      .withMessage("isPublic cannot be empty")
+      .isBoolean()
+      .withMessage("isPublic must be a boolean"),
+  ],
+  async (request: express.Request, response: express.Response) => {
+    const validationErrors = validationResult(request);
+    if (!validationErrors.isEmpty()) {
+      response.status(400).json({ errors: validationErrors.array() });
+      return;
+    }
+    const username: string | null = getUsername(request);
+    const documentId: string = request.body.documentId;
+    const isPublic: boolean = request.body.isPublic;
+    updateDocumentVisibility({ username, documentId, isPublic })
+      .then(() => response.sendStatus(200))
+      .catch((error) => response.json({ error: error }));
+  },
+);
 
 const server = app.listen(PORT, () => {
   console.log(`Server listening on port ${PORT}`);
