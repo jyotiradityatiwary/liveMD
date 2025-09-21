@@ -29,50 +29,55 @@ export const db = new sqlite3.Database(
   },
 );
 
-export function initializeDatabseIfNotInitialized(): void {
-  db.get(
-    "SELECT name FROM sqlite_master WHERE type='table' AND name='Users';",
-    [],
-    (error, row) => {
-      if (error) {
-        console.error(
-          "Unexpected error when checking if database is initialized",
-        );
-        process.exit(1);
-      }
-      if (row !== undefined) {
-        // The DB is already initialized
-        console.debug("Database is already initialized");
-        return;
-      }
-      console.log("Databse not initiliazed. Initializing now.");
-      db.exec(
-        `
+export async function initializeDatabseIfNotInitialized(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    db.get(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='Users';",
+      [],
+      (error, row) => {
+        if (error) {
+          const msg =
+            "Unexpected error when checking if database is initialized";
+          console.error(msg);
+          reject(msg);
+        }
+        if (row !== undefined) {
+          // The DB is already initialized
+          console.debug("Database is already initialized");
+          resolve();
+          return;
+        }
+        console.log("Databse not initiliazed. Initializing now.");
+        db.exec(
+          `
         CREATE TABLE Users (
           username STRING PRIMARY KEY,
+          displayName STRING NOT NULL,
           password STRING NOT NULL
         );
 
         CREATE TABLE Documents (
           documentId STRING PRIMARY KEY,
           ownerUsername STRING NOT NULL REFERENCES Users(username) ON DELETE CASCADE,
-          title STRING NOT NULL,
+          title STRING NOT NULL DEFAULT 'Document',
           isPublic BOOLEAN NOT NULL
         );
 
         CREATE INDEX idxOwnerUsernameOnDocuments ON Documents(ownerUsername);
           `,
-        (error) => {
-          if (error) {
-            console.error(
-              "Unexpected error when trying to initialize database.",
-            );
-            process.exit(1);
-          }
-        },
-      );
-    },
-  );
+          (error) => {
+            if (error) {
+              const msg =
+                "Unexpected error when trying to initialize database.";
+              console.error(msg);
+              reject(msg);
+              process.exit(1);
+            } else resolve();
+          },
+        );
+      },
+    );
+  });
 }
 
 async function getNewDocumentId(): Promise<string> {

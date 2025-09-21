@@ -15,7 +15,7 @@ import {
 
 const SALT_ROUNDS = 10;
 
-initializeDatabseIfNotInitialized();
+await initializeDatabseIfNotInitialized();
 
 if (!process.env.COOKIE_SECRET) {
   console.warn(
@@ -180,7 +180,7 @@ app.post("/api/newDocument", async (request, response) => {
     response.redirect("/login");
     return;
   }
-  const newDocumentId: string = await newDocument(request.session!.username);
+  const newDocumentId: string = await newDocument(request.session.username);
   response.redirect(`/editor?documentId=${newDocumentId}`);
 });
 
