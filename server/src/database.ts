@@ -87,8 +87,11 @@ async function getNewDocumentId(): Promise<string> {
       "SELECT 1 FROM Documents WHERE documentId=?",
       [newDocId],
       async (error, row) => {
-        if (error) reject();
-        else if (row === undefined) resolve(newDocId);
+        if (error) {
+          const msg = `Unexpected error in function getNewDocumentId(). error=${JSON.stringify(error)}`;
+          console.warn(msg);
+          reject();
+        } else if (row === undefined) resolve(newDocId);
         else resolve(await getNewDocumentId());
       },
     );
@@ -97,17 +100,38 @@ async function getNewDocumentId(): Promise<string> {
 
 export async function newDocument(ownerUsername: string): Promise<string> {
   const newId: string = await getNewDocumentId();
+  console.debug(`new document id found: ${newId}`);
   return new Promise((resolve, reject) => {
     db.run(
-      "INSERT INTO Documents(documentId, ownerUsername, isPublic) VALUES(?, ?, ?);",
-      [newId, ownerUsername, false],
+      "INSERT INTO Documents(documentId, ownerUsername, isPublic, title) VALUES(?, ?, ?, ?);",
+      [newId, ownerUsername, false, "Document"],
       (error) => {
-        if (error) reject();
-        else resolve(newId);
+        if (error) {
+          const msg = `Warning: unexpected error in function newDocument(ownerUsername): ${JSON.stringify(error)}`;
+          reject(msg);
+        } else resolve(newId);
       },
     );
   });
 }
+
+export type DocumentAccessDetail =
+  | {
+      isLoggedIn: false;
+      hasAccess: false;
+    }
+  | {
+      isLoggedIn: true;
+      documentExists: false;
+      hasAccess: false;
+    }
+  | {
+      isLoggedIn: true;
+      documentExists: true;
+      isPublic: boolean;
+      isOwned: boolean;
+      hasAccess: boolean;
+    };
 
 export async function checkAccess({
   username,
@@ -115,17 +139,7 @@ export async function checkAccess({
 }: {
   username: string | null;
   documentId: string;
-}): Promise<
-  | { isLoggedIn: false; hasAccess: false }
-  | { isLoggedIn: true; documentExists: false; hasAccess: false }
-  | {
-      isLoggedIn: true;
-      documentExists: true;
-      isPublic: boolean;
-      isOwned: boolean;
-      hasAccess: boolean;
-    }
-> {
+}): Promise<DocumentAccessDetail> {
   return new Promise((resolve, reject) => {
     if (username === null) resolve({ isLoggedIn: false, hasAccess: false });
     db.get(
@@ -193,6 +207,85 @@ export async function updateDocumentVisibility({
       (error) => {
         if (error) reject("unexpected error");
         else resolve();
+      },
+    );
+  });
+}
+
+export async function getCorrectHashedPassword(
+  username: string,
+): Promise<string | null> {
+  return new Promise((resolve, reject) => {
+    db.get(
+      "SELECT password FROM Users WHERE username = ?",
+      [username],
+      async (error: Error | null, row: object | undefined) => {
+        if (error) {
+          return reject(
+            "Unexpected error occurred when trying to fetch correct password for a user.",
+          );
+        }
+        if (row === undefined) {
+          return resolve(null);
+        }
+        const pass = row["password"];
+        if (pass === undefined) {
+          return reject(
+            "Password column not found in row when trying to log in.",
+          );
+        }
+        if (!(typeof pass === "string")) {
+          return reject(
+            "Password column of unexpected type when trying to log in.",
+          );
+        }
+        return resolve(pass);
+      },
+    );
+  });
+}
+
+export async function getDocumentTitle(
+  documentId: string,
+): Promise<string | null> {
+  return new Promise<string>((resolve, reject) => {
+    const sql = "SELECT title FROM Documents WHERE documentId = ?;";
+    const params = [documentId];
+    db.get(sql, params, (error: Error, row: object | undefined) => {
+      if (error)
+        return reject(
+          `Unexpected error in getDocumentTitle(documentId) -> ${JSON.stringify(error)}`,
+        );
+      if (row === undefined) return resolve(null);
+      const title = row["title"];
+      if (title === undefined)
+        return reject(
+          "Required column title not found in sql response row in getDocumentTitle(documentId)",
+        );
+      if (typeof title !== "string")
+        return reject(
+          "Unexpected data type of 'title' column in sql response row in getDocumentTitle(documentId)",
+        );
+      return resolve(title);
+    });
+  });
+}
+
+export async function getUserDisplayName(username: string): Promise<string> {
+  const sql = "SELECT displayName FROM Users WHERE username = ?;";
+  const params = [username];
+  return new Promise((resolve, reject) => {
+    db.get(
+      sql,
+      params,
+      (error: Error, row: { displayName: string } | undefined) => {
+        if (error)
+          return reject("Unexpected error in getUserDisplayName(username)");
+        if (row === undefined)
+          return reject(
+            "username not found in db (in getUserDisplayName(username))",
+          );
+        resolve(row.displayName);
       },
     );
   });

@@ -11,6 +11,10 @@ import {
   newDocument,
   checkAccess,
   updateDocumentVisibility,
+  type DocumentAccessDetail,
+  getDocumentTitle,
+  getCorrectHashedPassword,
+  getUserDisplayName,
 } from "./src/database.ts";
 
 const SALT_ROUNDS = 10;
@@ -57,58 +61,30 @@ app.post(
       .isString()
       .withMessage("password must be a string"),
   ],
-  (request: express.Request, response: express.Response) => {
+  async (request: express.Request, response: express.Response) => {
     const validationErrors = validationResult(request);
     if (!validationErrors.isEmpty()) {
       return response.status(400).json({ errors: validationErrors.array() });
     }
     const username = request.body.username;
     const password: string = request.body.password as string;
-    db.get(
-      "SELECT password FROM Users WHERE username = ?",
-      [username],
-      async (error: Error | null, row: object | undefined) => {
-        if (error) {
-          console.error(
-            "Unexpected error occurred when trying to fetch correct password for a user.",
-          );
-          response.sendStatus(500);
-          return;
-        }
-        if (row === undefined) {
-          console.debug("Username not found in database in login attempt.");
-          response.redirect("/login?retry=true");
-          return;
-        }
-        if (!("password" in row)) {
-          console.error(
-            "Password column not found in row when trying to log in.",
-          );
-          response.sendStatus(500);
-          return;
-        }
-        if (!(typeof row.password === "string")) {
-          console.error(
-            "Password column of unexpected type when trying to log in.",
-          );
-          response.sendStatus(500);
-          return;
-        }
-        const correctHashedPassword = row.password;
-        const passwordMatch: boolean = await bcrypt.compare(
-          password,
-          correctHashedPassword,
-        );
-        if (passwordMatch) {
-          console.debug(`username:${username} logged in`);
-          request.session!.username = username;
-          response.redirect("/");
-        } else {
-          console.debug("Password mismatch in login attempt");
-          response.redirect("/login?retry=true");
-        }
-      },
+
+    const correctHashedPassword = await getCorrectHashedPassword(username);
+    if (correctHashedPassword === null) {
+      return response.redirect("/login?retry=true");
+    }
+    const passwordMatch: boolean = await bcrypt.compare(
+      password,
+      correctHashedPassword,
     );
+    if (passwordMatch) {
+      console.debug(`username:${username} logged in`);
+      request.session!.username = username;
+      response.redirect("/");
+    } else {
+      console.debug("Password mismatch in login attempt");
+      response.redirect("/login?retry=true");
+    }
   },
 );
 
@@ -232,6 +208,46 @@ app.post(
     updateDocumentVisibility({ username, documentId, isPublic })
       .then(() => response.sendStatus(200))
       .catch((error) => response.json({ error: error }));
+  },
+);
+
+export type EditorPageDetails = {
+  accessDetail: DocumentAccessDetail;
+  userDetails: UserDetails | null;
+  title: string | null;
+};
+
+type UserDetails = {
+  username: string;
+  displayName: string;
+};
+
+async function getUserDetails(username: string): Promise<UserDetails> {
+  const displayName = await getUserDisplayName(username);
+  return { username, displayName };
+}
+
+app.get(
+  "/api/getEditorPageDetails",
+  [query("documentId").notEmpty().isString()],
+  async (request: express.Request, response: express.Response) => {
+    const validationErrors = validationResult(request);
+    if (!validationErrors.isEmpty()) {
+      response.status(400).json({ errors: validationErrors.array() });
+      return;
+    }
+    const documentId = request.query.documentId as string;
+    const username: string | null = getUsername(request);
+    const accessDetail = await checkAccess({
+      documentId: documentId,
+      username: username,
+    });
+    const details: EditorPageDetails = {
+      accessDetail: accessDetail,
+      title: accessDetail.hasAccess ? await getDocumentTitle(documentId) : null,
+      userDetails: username === null ? null : await getUserDetails(username),
+    };
+    return response.json(details);
   },
 );
 

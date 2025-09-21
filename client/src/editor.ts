@@ -6,6 +6,7 @@ import "@milkdown/crepe/theme/frame.css";
 import { collab, collabServiceCtx } from "@milkdown/plugin-collab";
 import { WebsocketProvider } from "y-websocket";
 import { Doc } from "yjs";
+import type { EditorPageDetails } from "../../server/server";
 
 const doc = new Doc();
 const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -43,9 +44,10 @@ export async function updateDocumentVisibility({
   return await response.text();
 }
 
-async function getDocumentAccess() {
+async function getPageDetails(): Promise<EditorPageDetails> {
   const response = await fetch(
-    "/api/checkAccess?" + new URLSearchParams({ documentId: documentId }),
+    "/api/getEditorPageDetails?" +
+      new URLSearchParams({ documentId: documentId }),
     {
       method: "get",
     },
@@ -53,26 +55,42 @@ async function getDocumentAccess() {
   return await response.json();
 }
 
-const documentAccess = await getDocumentAccess();
-console.debug(`documentAccess=${documentAccess}`);
-if (!documentAccess.isLoggedIn) {
+const details = await getPageDetails();
+const accessDetails = details.accessDetail;
+console.debug(`documentAccess=${accessDetails}`);
+if (!accessDetails.isLoggedIn) {
   alert("You are not logged in.");
   window.location.assign("/login");
-} else if (!documentAccess.documentExists) {
+} else if (!accessDetails.documentExists) {
   alert("This document ID does not exist.");
   window.location.replace("/");
-} else if (!documentAccess.hasAccess) {
+} else if (!accessDetails.hasAccess) {
   alert("You do not have access to this document.");
   window.location.assign("/");
 } else {
   const roomName: string = documentId;
   const wsServerUrl = `${wsProtocol}//${window.location.host}/api/documents`; // Connects to the same host
 
+  const usercolors = [
+    "#30bced",
+    "#6eeb83",
+    "#ffbc42",
+    "#ecd444",
+    "#ee6352",
+    "#9ac2c9",
+    "#8acb88",
+    "#1be7ff",
+  ];
+
   const wsProvider = new WebsocketProvider(wsServerUrl, roomName, doc);
-  let wsStatus: "connected" | "connecting" | "disconnected" = "disconnected";
+  wsProvider.awareness.setLocalStateField("user", {
+    ...wsProvider.awareness.getLocalState,
+    name: details.userDetails?.displayName ?? "Unauthenticated user",
+    color: usercolors[Math.floor(Math.random() * usercolors.length)],
+  });
+
   function updateWsStatus(status: "connected" | "connecting" | "disconnected") {
-    wsStatus = status;
-    console.debug(wsStatus);
+    console.debug(status);
   }
 
   wsProvider.on("status", (event) => {
