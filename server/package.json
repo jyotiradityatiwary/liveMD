@@ -20,7 +20,8 @@
     "express-ws": "^5.0.2",
     "prompt-sync": "^4.2.0",
     "sqlite3": "^5.1.7",
-    "y-websocket": "^3.0.0"
+    "y-websocket": "^3.0.0",
+    "yjs": "^13.6.27"
   },
   "devDependencies": {
     "@types/bcrypt": "^6.0.0",

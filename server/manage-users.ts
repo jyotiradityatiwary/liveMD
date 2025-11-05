@@ -2,7 +2,7 @@ import { type Database } from "sqlite3";
 import promptSync from "prompt-sync";
 import bcrypt from "bcrypt";
 
-import { db, initializeDatabseIfNotInitialized } from "./src/database.ts";
+import { db, initializeDatabaseIfNotInitialized } from "./src/database.ts";
 
 const SALT_ROUNDS = 10;
 
@@ -60,7 +60,7 @@ async function createUser(): Promise<void> {
     plaintextPassword,
     SALT_ROUNDS,
   );
-  await initializeDatabseIfNotInitialized();
+  await initializeDatabaseIfNotInitialized();
   await insertUserIntoDb(db, username, hashedPassword, displayName);
   db.close();
 }
@@ -79,7 +79,7 @@ async function deleteUserFromDb(db: Database, username: string): Promise<void> {
 
 async function deleteUser(): Promise<void> {
   const username: string = getText("Enter username: ");
-  await initializeDatabseIfNotInitialized();
+  await initializeDatabaseIfNotInitialized();
   await deleteUserFromDb(db, username);
   db.close();
 }
@@ -116,7 +116,7 @@ async function listUsersInDb(db: Database): Promise<void> {
 }
 
 async function listUsers(): Promise<void> {
-  await initializeDatabseIfNotInitialized();
+  await initializeDatabaseIfNotInitialized();
   await listUsersInDb(db);
   db.close();
 }

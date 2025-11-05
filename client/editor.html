@@ -167,14 +167,15 @@
                     class="document-title"
                     value="Untitled Document"
                     placeholder="Document name"
+                    id="document-title"
                 />
             </div>
 
             <!-- Right side: Account info -->
             <div class="account-info">
                 <div class="account-details">
-                    <div class="account-name">John Smith</div>
-                    <div class="account-email">john.smith@email.com</div>
+                    <div class="account-name" id="account-name">John Smith</div>
+                    <div class="account-email" id="account-email">john.smith@email.com</div>
                 </div>
                 <div class="avatar">JS</div>
             </div>
@@ -202,7 +203,7 @@
                 this.select();
             });
         </script>
-        <script type="module">
+        <script type="module" defer>
             import { updateDocumentVisibility } from "/src/editor.ts";
             window.updateDocumentVisibility = updateDocumentVisibility;
         </script>

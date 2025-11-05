@@ -82,10 +82,37 @@ if (!accessDetails.isLoggedIn) {
     "#1be7ff",
   ];
 
+    // set fetched details on page
+    const userDetails = details.userDetails!;
+    const userDisplayName = userDetails?.displayName ?? "Unauthenticated user";
+    const userEmail = userDetails?.username ?? "";
+    document.getElementById("account-name")!.textContent = userDisplayName;
+    document.getElementById("account-email")!.textContent = userEmail;
+    const documentTitleInputField = document.getElementById("document-title")!;
+    documentTitleInputField.setAttribute("value", details.title ?? "Unknown Document Title");
+    documentTitleInputField.onchange = async (event) => {
+        // @ts-ignore
+        const newTitle = event.target!.value;
+        await fetch(
+            "/api/updateDocumentTitle",
+            {
+                method: "post",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                    documentId,
+                    newTitle,
+                }),
+            },
+        );
+    }
+
+
   const wsProvider = new WebsocketProvider(wsServerUrl, roomName, doc);
   wsProvider.awareness.setLocalStateField("user", {
     ...wsProvider.awareness.getLocalState,
-    name: details.userDetails?.displayName ?? "Unauthenticated user",
+      name: userDisplayName,
     color: usercolors[Math.floor(Math.random() * usercolors.length)],
   });
 

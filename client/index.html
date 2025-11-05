@@ -302,8 +302,8 @@
             <!-- Right side: Account info -->
             <div class="account-info">
                 <div class="account-details">
-                    <div class="account-name">John Smith</div>
-                    <div class="account-email">john.smith@email.com</div>
+                    <div class="account-name" id="accountName">John Smith</div>
+                    <div class="account-email" id="accountEmail">john.smith@email.com</div>
                 </div>
                 <div class="avatar">JS</div>
             </div>
@@ -331,17 +331,15 @@
         </div>
 
         <script>
-            // Sample document data
-            const documents = [
-                {
-                    id: 1,
-                    title: "Project README",
-                    preview:
-                        "# My Awesome Project\n\nThis is a comprehensive guide to setting up and using my project. It includes installation instructions, usage examples, and troubleshooting tips.",
-                    lastModified: "2 hours ago",
-                    type: "README",
-                },
-            ];
+            async function getHomePageDetails() {
+                const response = await fetch('/api/getHomePageDetails', {method: 'get'});
+                const data = await response.json();
+                if ('error' in data) {
+                    console.error(data.error);
+                    return null;
+                }
+                return data;
+            }
 
             function toggleMode() {
                 const toggleSwitch = document.getElementById("toggleSwitch");
@@ -356,9 +354,8 @@
                 }
             }
 
-            function getGreeting() {
+            function getGreeting(name) {
                 const hour = new Date().getHours();
-                const name = "John";
 
                 if (hour < 12) {
                     return `Good morning, ${name}! ☀️`;
@@ -369,72 +366,158 @@
                 }
             }
 
-            function renderDocuments() {
+            function renderDocuments(documents) {
                 const grid = document.getElementById("documentsGrid");
 
+                // Clear the grid safely and efficiently
+                grid.replaceChildren();
+
                 if (documents.length === 0) {
-                    grid.innerHTML = `
-                    <div class="empty-state">
-                        <div class="empty-state-icon">📝</div>
-                        <h3 class="empty-state-title">No documents yet</h3>
-                        <p class="empty-state-text">Create your first markdown document to get started</p>
-                        <button class="new-document-btn" onclick="createNewDocument()">
-                            Create Your First Document
-                        </button>
-                    </div>
-                `;
+                    // Build the empty state using safe DOM methods
+                    const emptyState = document.createElement('div');
+                    emptyState.className = 'empty-state';
+
+                    const icon = document.createElement('div');
+                    icon.className = 'empty-state-icon';
+                    icon.textContent = '📝'; // .textContent is safe
+                    emptyState.appendChild(icon);
+
+                    const title = document.createElement('h3');
+                    title.className = 'empty-state-title';
+                    title.textContent = 'No documents yet'; // .textContent is safe
+                    emptyState.appendChild(title);
+
+                    const text = document.createElement('p');
+                    text.className = 'empty-state-text';
+                    text.textContent = 'Create your first markdown document to get started'; // .textContent is safe
+                    emptyState.appendChild(text);
+
+                    // const button = document.createElement('button');
+                    // button.className = 'new-document-btn';
+                    // button.textContent = 'Create Your First Document';
+                    // button.addEventListener('click', createNewDocument); // Safe event listener
+                    // emptyState.appendChild(button);
+
+                    grid.appendChild(emptyState);
                     return;
                 }
 
-                grid.innerHTML = documents
-                    .map(
-                        (doc) => `
-                <div class="document-card" onclick="openDocument(${doc.id})">
-                    <div class="document-header">
-                        <div>
-                            <h3 class="document-title">${doc.title}</h3>
-                            <div class="document-meta">Last modified: ${doc.lastModified}</div>
-                        </div>
-                    </div>
-                    <div class="document-preview">${doc.preview}</div>
-                    <div class="document-actions">
-                        <span class="document-type">${doc.type}</span>
-                        <button class="delete-btn" onclick="deleteDocument(event, ${doc.id})">
-                            Delete
-                        </button>
-                    </div>
-                </div>
-            `,
-                    )
-                    .join("");
+                // Use a DocumentFragment for better performance when appending many items
+                const fragment = document.createDocumentFragment();
+
+                documents.forEach(doc => {
+                    // 1. Create all elements
+                    const card = document.createElement('div');
+                    card.className = 'document-card';
+
+                    const header = document.createElement('div');
+                    header.className = 'document-header';
+
+                    const headerContent = document.createElement('div');
+
+                    const title = document.createElement('h3');
+                    title.className = 'document-title';
+                    // 2. Use .textContent to safely insert data (prevents XSS)
+                    title.textContent = doc.title;
+
+                    const meta = document.createElement('div');
+                    meta.className = 'document-meta';
+                    // 2. .textContent automatically escapes any HTML
+                    meta.textContent = `Last modified: ${doc.lastModified}`;
+
+                    const actions = document.createElement('div');
+                    actions.className = 'document-actions';
+
+                    const type = document.createElement('span');
+                    type.className = 'document-type';
+                    // 2. Safe insertion
+                    type.textContent = doc.documentId;
+
+                    const deleteBtn = document.createElement('button');
+                    deleteBtn.className = 'delete-btn';
+                    deleteBtn.textContent = 'Delete';
+
+                    // 3. Use addEventListener for safe and clean event handling
+                    card.addEventListener('click', () => openDocument(doc.documentId));
+
+                    deleteBtn.addEventListener('click', (event) => {
+                        // Stop the click from bubbling up to the card's listener
+                        event.stopPropagation();
+                        deleteDocument(event, doc.documentId);
+                    });
+
+                    // 4. Assemble the structure
+                    headerContent.appendChild(title);
+                    headerContent.appendChild(meta);
+                    header.appendChild(headerContent);
+
+                    actions.appendChild(type);
+                    actions.appendChild(deleteBtn);
+
+                    card.appendChild(header);
+                    card.appendChild(actions);
+
+                    fragment.appendChild(card);
+                });
+
+                // Append the fragment to the grid once, which is faster than appending one by one
+                grid.appendChild(fragment);
             }
 
-            function deleteDocument(event, docId) {
+            async function renderPage() {
+                const {displayName, documents, username} = await getHomePageDetails();
+                document.getElementById("greetingText").textContent =
+                    getGreeting(displayName);
+                document.getElementById("accountName").textContent = displayName;
+                document.getElementById("accountEmail").textContent = username;
+                renderDocuments(documents);
+            }
+
+            async function deleteDocument(event, docId) {
                 event.stopPropagation(); // Prevent card click
 
                 if (confirm("Are you sure you want to delete this document?")) {
-                    const index = documents.findIndex(
-                        (doc) => doc.id === docId,
-                    );
-                    if (index !== -1) {
-                        documents.splice(index, 1);
-                        renderDocuments();
+                    try {
+                        const response = await fetch('/api/deleteDocument', {
+                            method: 'post',
+                            headers: {
+                                'Content-Type': 'application/json',
+                            },
+                            body: JSON.stringify({
+                                documentId: docId,
+                            })
+                        });
+                        if (response.ok) {
+                            window.location.reload();
+                        } else {
+                            console.error("Failed to delete document. Trying to parse error...",);
+                            try {
+                                const data = await response.json();
+                                const error = data.error;
+                                console.error(JSON.stringify(error));
+                            } catch (error) {
+                                console.error("Failed to parse error")
+                                console.error(JSON.stringify(error));
+                            }
+                        }
+                    } catch (err) {
+                        console.error(err);
                     }
                 }
             }
 
             function openDocument(docId) {
-                console.log("Opening document:", docId);
-                // Here you would navigate to the editor with the selected document
-                alert(`Opening document with ID: ${docId}`);
+                window.location.assign(`/editor?documentId=${docId}`);
             }
 
             // Initialize the page
-            document.addEventListener("DOMContentLoaded", function () {
-                document.getElementById("greetingText").textContent =
-                    getGreeting();
-                renderDocuments();
-            });
+            document.addEventListener("DOMContentLoaded", renderPage);
+            window.addEventListener("pageshow", (event) => {
+                console.log("pageshow", event);
+                if (event.persisted) {
+                    renderPage();
+                }
+            })
         </script>
     </body>
 </html>

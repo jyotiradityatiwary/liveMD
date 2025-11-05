@@ -2,6 +2,7 @@ import path from "path";
 import { randomUUID } from "crypto";
 
 import sqlite3 from "sqlite3";
+import {Doc} from "yjs";
 
 const DATA_DIR = process.env.SERVER_DATA_DIR || "./data";
 console.log(`Using directory ${DATA_DIR} for application data`);
@@ -29,7 +30,7 @@ export const db = new sqlite3.Database(
   },
 );
 
-export async function initializeDatabseIfNotInitialized(): Promise<void> {
+export async function initializeDatabaseIfNotInitialized(): Promise<void> {
   return new Promise((resolve, reject) => {
     db.get(
       "SELECT name FROM sqlite_master WHERE type='table' AND name='Users';",
@@ -51,24 +52,26 @@ export async function initializeDatabseIfNotInitialized(): Promise<void> {
         db.exec(
           `
         CREATE TABLE Users (
-          username STRING PRIMARY KEY,
-          displayName STRING NOT NULL,
-          password STRING NOT NULL
-        );
+          username TEXT PRIMARY KEY,
+          displayName TEXT NOT NULL,
+          password TEXT NOT NULL
+        ) STRICT;
 
         CREATE TABLE Documents (
-          documentId STRING PRIMARY KEY,
-          ownerUsername STRING NOT NULL REFERENCES Users(username) ON DELETE CASCADE,
-          title STRING NOT NULL DEFAULT 'Document',
-          isPublic BOOLEAN NOT NULL
-        );
+          documentId TEXT PRIMARY KEY,
+          ownerUsername TEXT NOT NULL REFERENCES Users(username) ON DELETE CASCADE,
+          title TEXT NOT NULL DEFAULT 'Document',
+          isPublic INTEGER NOT NULL DEFAULT 0 CHECK (isPublic in (0, 1)),
+          yDocData BLOB DEFAULT NULL,
+          lastModified INTEGER NOT NULL
+        ) STRICT;
 
-        CREATE INDEX idxOwnerUsernameOnDocuments ON Documents(ownerUsername);
+        CREATE INDEX DocumentsIdx ON Documents(ownerUsername, lastModified);
           `,
           (error) => {
             if (error) {
               const msg =
-                "Unexpected error when trying to initialize database.";
+                "Unexpected error when trying to initialize database. error: " + JSON.stringify(error);
               console.error(msg);
               reject(msg);
               process.exit(1);
@@ -84,7 +87,7 @@ async function getNewDocumentId(): Promise<string> {
   const newDocId = randomUUID();
   return new Promise((resolve, reject) => {
     db.get(
-      "SELECT 1 FROM Documents WHERE documentId=?",
+      "SELECT 1 FROM Documents WHERE documentId=?;",
       [newDocId],
       async (error, row) => {
         if (error) {
@@ -103,8 +106,8 @@ export async function newDocument(ownerUsername: string): Promise<string> {
   console.debug(`new document id found: ${newId}`);
   return new Promise((resolve, reject) => {
     db.run(
-      "INSERT INTO Documents(documentId, ownerUsername, isPublic, title) VALUES(?, ?, ?, ?);",
-      [newId, ownerUsername, false, "Document"],
+      "INSERT INTO Documents(documentId, ownerUsername, isPublic, title, yDocData, lastModified) VALUES(?, ?, 0, 'Document', NULL, UNIXEPOCH('now'));",
+      [newId, ownerUsername],
       (error) => {
         if (error) {
           const msg = `Warning: unexpected error in function newDocument(ownerUsername): ${JSON.stringify(error)}`;
@@ -143,11 +146,11 @@ export async function checkAccess({
   return new Promise((resolve, reject) => {
     if (username === null) resolve({ isLoggedIn: false, hasAccess: false });
     db.get(
-      "SELECT ownerUsername, isPublic FROM Documents WHERE documentId = ?",
+      "SELECT ownerUsername, isPublic FROM Documents WHERE documentId = ?;",
       [documentId],
       (
         error: Error | null,
-        row: undefined | { ownerUsername: string; isPublic: boolean },
+        row: undefined | { ownerUsername: string; isPublic: number },
       ) => {
         if (error) {
           console.warn(
@@ -164,7 +167,7 @@ export async function checkAccess({
           });
           return;
         }
-        const isPublic = row.isPublic;
+        const isPublic = row.isPublic != 0;
         const isOwned = row.ownerUsername == username;
         resolve({
           isLoggedIn: true,
@@ -203,13 +206,47 @@ export async function updateDocumentVisibility({
     }
     db.run(
       "UPDATE Documents SET isPublic=? WHERE documentId=?",
-      [isPublic, documentId],
+      [isPublic ? 1 : 0, documentId],
       (error) => {
         if (error) reject("unexpected error");
         else resolve();
       },
     );
   });
+}
+
+export async function updateDocumentTitle({
+    username,
+    documentId,
+    newTitle,
+}: {
+    username: string | null;
+    documentId: string;
+    newTitle: string;
+}): Promise<void> {
+    const accessDetails = await checkAccess({username, documentId});
+    return new Promise((resolve, reject) => {
+        if (!accessDetails.isLoggedIn) {
+            reject("not logged in");
+            return;
+        }
+        if (!accessDetails.documentExists) {
+            reject("invalid documentId");
+            return;
+        }
+        if (!accessDetails.isOwned) {
+            reject("not owned");
+            return;
+        }
+        db.run(
+            "UPDATE Documents SET title=? WHERE documentId=?",
+            [newTitle, documentId],
+            (error) => {
+                if (error) reject("unexpected error");
+                else resolve();
+            },
+        );
+    });
 }
 
 export async function getCorrectHashedPassword(
@@ -228,12 +265,12 @@ export async function getCorrectHashedPassword(
         if (row === undefined) {
           return resolve(null);
         }
-        const pass = row["password"];
-        if (pass === undefined) {
+        if (!("password" in row)) {
           return reject(
             "Password column not found in row when trying to log in.",
           );
         }
+        const pass = row["password"];
         if (!(typeof pass === "string")) {
           return reject(
             "Password column of unexpected type when trying to log in.",
@@ -248,7 +285,7 @@ export async function getCorrectHashedPassword(
 export async function getDocumentTitle(
   documentId: string,
 ): Promise<string | null> {
-  return new Promise<string>((resolve, reject) => {
+  return new Promise<string | null>((resolve, reject) => {
     const sql = "SELECT title FROM Documents WHERE documentId = ?;";
     const params = [documentId];
     db.get(sql, params, (error: Error, row: object | undefined) => {
@@ -257,11 +294,11 @@ export async function getDocumentTitle(
           `Unexpected error in getDocumentTitle(documentId) -> ${JSON.stringify(error)}`,
         );
       if (row === undefined) return resolve(null);
-      const title = row["title"];
-      if (title === undefined)
+      if (!('title' in row))
         return reject(
           "Required column title not found in sql response row in getDocumentTitle(documentId)",
         );
+      const title = row["title"];
       if (typeof title !== "string")
         return reject(
           "Unexpected data type of 'title' column in sql response row in getDocumentTitle(documentId)",
@@ -289,4 +326,60 @@ export async function getUserDisplayName(username: string): Promise<string> {
       },
     );
   });
+}
+
+export type UserDocumentDetails = {
+    documentId: string;
+    title: string;
+    lastModified: number;
+};
+
+export async function getDocumentDetailsForUser(username: string): Promise<UserDocumentDetails[]> {
+    return new Promise<UserDocumentDetails[]>((resolve, reject) => {
+        db.all(
+            "SELECT documentId, title, lastModified FROM Documents WHERE ownerUsername = ? ORDER BY lastModified DESC;",
+            [username],
+            (error: Error | null, rows: UserDocumentDetails[]) => {
+                if (error) return reject("unexpected sql error");
+                return resolve(rows);
+            }
+        )
+    })
+}
+
+export async function deleteDocument({
+    username,
+    documentId,
+}: {
+    username: string | null;
+    documentId: string;
+}): Promise<void> {
+    // console.log(`deleteDocument(${JSON.stringify({
+    //     username,
+    //     documentId,
+    // })})`);
+    const accessDetails = await checkAccess({username, documentId});
+    // console.log(`ACCESS DETAILS: ${JSON.stringify(accessDetails)}`);
+    return new Promise((resolve, reject) => {
+        if (!accessDetails.isLoggedIn) {
+            reject("not logged in");
+            return;
+        }
+        if (!accessDetails.documentExists) {
+            reject("invalid documentId");
+            return;
+        }
+        if (!accessDetails.isOwned) {
+            reject("not owned");
+            return;
+        }
+        db.run(
+            "DELETE FROM Documents WHERE documentId=?",
+            [documentId],
+            (error) => {
+                if (error) reject("unexpected error");
+                else resolve();
+            },
+        );
+    });
 }
